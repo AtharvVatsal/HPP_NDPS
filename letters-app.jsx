@@ -838,7 +838,7 @@ function LettersApp() {
               <div className={"lf-cta-stat " + (ready.selectedOK ? "ok" : "bad")}>{ready.selectedOK ? "✓" : "✗"} {form.selectedLetters.length} letters</div>
             </div>
             <Btn variant="primary" disabled={!allReady} onClick={() => setPopup(true)}>
-              📄  Generate Letters Window →
+              📄 Generate {form.selectedLetters.length} letters →
             </Btn>
           </div>
         </div>
