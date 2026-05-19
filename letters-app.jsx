@@ -592,6 +592,195 @@ function ShareModal({ form, onClose, onToast }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Email helpers — open the user's chosen mail service with the letter as a
+// PDF attachment + a pre-filled subject + body. PDF is generated in-browser
+// via html2pdf.js (lazy-loaded so it doesn't bloat the initial bundle).
+// ─────────────────────────────────────────────────────────────────────────
+function buildEmailSubject(authority, caseData) {
+  const firNo = caseData.fir?.no || '____';
+  const code = authority.code || authority.id;
+  return `Section 94 BNSS Notice — FIR No. ${firNo} — ${code}`;
+}
+
+function buildEmailBody(authority, caseData) {
+  const fir = caseData.fir || {};
+  const stn = caseData.station || {};
+  const io  = caseData.io || {};
+  const days = caseData.perLetterDays?.[authority.id] ?? authority.defaultDays ?? 15;
+  const contactLine = [
+    io.phone ? `Mobile: ${io.phone}` : null,
+    io.email ? `Email: ${io.email}` : null,
+  ].filter(Boolean).join(' · ');
+  return `Sir / Madam,
+
+Please find attached an official communication dated ${caseData.letterDate || '____'} in connection with FIR No. ${fir.no || '____'} dated ${fir.date || '____'} registered at ${stn.name || 'Police Station ____'} under Sections ${fir.sections || '____'} of the NDPS Act, 1985.
+
+The investigation is being conducted under Chapter VA (Forfeiture of Illegally Acquired Property) of the NDPS Act. The information, records, and documents listed in the attached notice may kindly be furnished within ${days} days from the date of receipt.
+
+For any clarification, please contact the undersigned.
+
+Yours faithfully,
+${io.name || '____'}
+${io.rank ? io.rank + ' · ' : ''}${io.role || 'Investigating Officer'}
+${stn.name || ''}${contactLine ? '\n' + contactLine : ''}`;
+}
+
+function buildComposeUrl(provider, { to = '', subject = '', body = '' }) {
+  const s = encodeURIComponent(subject);
+  const b = encodeURIComponent(body);
+  const t = encodeURIComponent(to);
+  switch (provider) {
+    case 'gmail':
+      return `https://mail.google.com/mail/?view=cm&fs=1&to=${t}&su=${s}&body=${b}`;
+    case 'outlook':
+      return `https://outlook.live.com/owa/?path=/mail/action/compose&to=${t}&subject=${s}&body=${b}`;
+    case 'yahoo':
+      return `https://compose.mail.yahoo.com/?to=${t}&subject=${s}&body=${b}`;
+    case 'mailto':
+    default:
+      return `mailto:${t}?subject=${s}&body=${b}`;
+  }
+}
+
+async function generateLetterPdfBlob(letterId, fileName) {
+  const html2pdf = (await import('html2pdf.js')).default;
+  const wrap = document.querySelector(`.lf-popup-printregion .lf-letter-wrap[data-letter="${letterId}"]`);
+  const element = wrap?.querySelector('.ll-page');
+  if (!element) throw new Error('Letter not found — open the Generate window first.');
+  // Force full opacity & scale on the target wrap so html2canvas captures it
+  // at native quality regardless of focus state, then restore.
+  const prev = { opacity: wrap.style.opacity, transform: wrap.style.transform };
+  wrap.style.opacity = '1';
+  wrap.style.transform = 'none';
+  try {
+    return await html2pdf()
+      .set({
+        margin: 0,
+        filename: fileName,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait', compress: true },
+        pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
+      })
+      .from(element)
+      .toPdf()
+      .get('pdf')
+      .then(pdf => pdf.output('blob'));
+  } finally {
+    wrap.style.opacity = prev.opacity;
+    wrap.style.transform = prev.transform;
+  }
+}
+
+function downloadBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+function canNativelyShareFiles() {
+  if (typeof navigator === 'undefined' || !navigator.canShare || !navigator.share) return false;
+  try {
+    const probe = new File([new Blob(['x'], { type: 'application/pdf' })], 'probe.pdf', { type: 'application/pdf' });
+    return navigator.canShare({ files: [probe] });
+  } catch { return false; }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Send Email dialog — chooser + pre-filled subject/body + PDF generation
+// ─────────────────────────────────────────────────────────────────────────
+function SendEmailDialog({ authority, caseData, onClose, onToast }) {
+  const [to, setTo] = lfUseState('');
+  const [subject, setSubject] = lfUseState(buildEmailSubject(authority, caseData));
+  const [body, setBody] = lfUseState(buildEmailBody(authority, caseData));
+  const [working, setWorking] = lfUseState(false);
+  const [error, setError] = lfUseState('');
+  const fileName = `${authority.id}_${authority.code || 'letter'}_${(caseData.fir.no || 'FIR').replace(/\//g, '-')}.pdf`;
+  const shareFiles = lfUseMemo(canNativelyShareFiles, []);
+
+  const handleSend = async (provider) => {
+    setWorking(true); setError('');
+    try {
+      const blob = await generateLetterPdfBlob(authority.id, fileName);
+
+      if (provider === 'native') {
+        const file = new File([blob], fileName, { type: 'application/pdf' });
+        await navigator.share({ title: subject, text: body, files: [file] });
+        onToast && onToast('✓ Shared via system');
+        onClose();
+        return;
+      }
+
+      // For all webmail / mailto providers: download + open compose URL.
+      downloadBlob(blob, fileName);
+      const composeUrl = buildComposeUrl(provider, { to, subject, body });
+      window.open(composeUrl, '_blank', 'noopener,noreferrer');
+      onToast && onToast(`✓ ${fileName} downloaded — attach it in the compose window`);
+      onClose();
+    } catch (e) {
+      // AbortError = user cancelled the share sheet; not really an error.
+      if (e && e.name === 'AbortError') { setWorking(false); return; }
+      console.error('email send failed:', e);
+      setError(e.message || 'Could not generate PDF');
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  return (
+    <div className="lf-modal-back" onClick={(e) => { if (e.target.classList.contains('lf-modal-back')) onClose(); }}>
+      <div className="lf-modal" style={{ maxWidth: 640 }}>
+        <div className="lf-modal-hd">
+          <div className="lf-modal-title">📧 Send by email · {authority.id} · <span dangerouslySetInnerHTML={{ __html: authority.title }} /></div>
+          <button className="lf-modal-x" onClick={onClose}>✕</button>
+        </div>
+        <div className="lf-modal-body">
+          <p style={{ margin: '0 0 14px', fontSize: 12, color: 'var(--ink-soft)', lineHeight: 1.55 }}>
+            Pick your mail service below. The letter will be generated as a PDF and
+            downloaded; the compose window opens with the subject and body already
+            filled in. <b>On mobile</b>, the <b>Share…</b> option attaches the PDF
+            automatically.
+          </p>
+          <div className="lf-grid lf-grid-1">
+            <Field label="Recipient email" hint="optional — pre-fills the 'To' field">
+              <TI value={to} onChange={setTo} placeholder="recipient@example.in" />
+            </Field>
+            <Field label="Subject"><TI value={subject} onChange={setSubject} /></Field>
+            <Field label="Email body (edit as needed)"><TA value={body} onChange={setBody} rows={10} /></Field>
+          </div>
+          {error && <div style={{ background: 'var(--bad-soft)', color: 'var(--bad)', padding: 10, borderRadius: 6, fontSize: 12, marginTop: 10, fontWeight: 500 }}>{error}</div>}
+          <div style={{ marginTop: 14, padding: 12, background: 'var(--brand-acc-soft)', border: '1px dashed var(--brand-acc)', borderRadius: 8, fontSize: 11.5, color: 'var(--brand-deep)', lineHeight: 1.55 }}>
+            <b>What happens next:</b> the PDF downloads to your computer, then a new
+            tab opens for your chosen mail service. <b>Drag the PDF from the
+            downloads bar into the compose window</b> (or use the paperclip / attach
+            button), then add the recipient and send. The subject and body are
+            already in place.
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--line-soft)' }}>
+            <Btn variant="primary" onClick={() => handleSend('gmail')} disabled={working}>
+              {working ? 'Preparing PDF…' : '📨 Gmail'}
+            </Btn>
+            <Btn onClick={() => handleSend('outlook')} disabled={working}>Outlook</Btn>
+            <Btn onClick={() => handleSend('yahoo')} disabled={working}>Yahoo Mail</Btn>
+            <Btn onClick={() => handleSend('mailto')} disabled={working}>Default Mail App</Btn>
+            {shareFiles && (
+              <Btn onClick={() => handleSend('native')} disabled={working}>📱 Share…</Btn>
+            )}
+            <div style={{ flex: 1 }} />
+            <Btn onClick={onClose} disabled={working}>Cancel</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Pop-up Letters Window
 // ─────────────────────────────────────────────────────────────────────────
 function LettersPopup({ form, set, onClose, onToast }) {
@@ -601,6 +790,7 @@ function LettersPopup({ form, set, onClose, onToast }) {
   const [focus, setFocus] = lfUseState(selectedAll[0]?.id);
   const [showSidebar, setShowSidebar] = lfUseState(true);
   const [editSentFor, setEditSentFor] = lfUseState(null);
+  const [emailFor, setEmailFor] = lfUseState(null);
   const [hideSent, setHideSent] = lfUseState(false);
   const sentLog = form.sentLog || {};
   const visibleAll = hideSent ? selectedAll.filter(a => !sentLog[a.id]?.sent) : selectedAll;
@@ -702,11 +892,18 @@ function LettersPopup({ form, set, onClose, onToast }) {
                         ✓ Sent {sl.date} {sl.dispatchNo && <>· {sl.dispatchNo}</>}
                       </div>
                     )}
-                    <button
-                      onClick={(e) => { e.stopPropagation(); setEditSentFor(editSentFor === a.id ? null : a.id); }}
-                      title={sl.sent ? 'Edit dispatch details' : 'Mark this letter as sent'}
-                      style={{ position: 'absolute', right: 6, top: 6, background: sl.sent ? '#0a6e2a' : '#fff', color: sl.sent ? '#fff' : '#0a6e2a', border: '1px solid ' + (sl.sent ? '#0a6e2a' : '#c6efce'), borderRadius: 3, fontSize: 10, padding: '1px 6px', cursor: 'pointer' }}
-                    >{sl.sent ? '✓' : 'Mark sent'}</button>
+                    <div style={{ position: 'absolute', right: 6, top: 6, display: 'flex', gap: 4 }}>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setEmailFor(a); }}
+                        title="Send this letter by email (Gmail / Outlook / …)"
+                        style={{ background: '#fff', color: 'var(--brand-deep)', border: '1px solid var(--brand-acc)', borderRadius: 3, fontSize: 10, padding: '1px 7px', cursor: 'pointer', fontWeight: 600 }}
+                      >📧 Email</button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setEditSentFor(editSentFor === a.id ? null : a.id); }}
+                        title={sl.sent ? 'Edit dispatch details' : 'Mark this letter as sent'}
+                        style={{ background: sl.sent ? '#0a6e2a' : '#fff', color: sl.sent ? '#fff' : '#0a6e2a', border: '1px solid ' + (sl.sent ? '#0a6e2a' : '#c6efce'), borderRadius: 3, fontSize: 10, padding: '1px 6px', cursor: 'pointer' }}
+                      >{sl.sent ? '✓' : 'Mark sent'}</button>
+                    </div>
                     {editSentFor === a.id && (
                       <div onClick={e => e.stopPropagation()} style={{ marginTop: 6, padding: 8, background: '#fff', border: '1px solid #ece7da', borderRadius: 3, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
                         <label style={{ fontSize: 10, color: '#605e5c', gridColumn: 'span 2', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -748,6 +945,7 @@ function LettersPopup({ form, set, onClose, onToast }) {
           </main>
         </div>
       </div>
+      {emailFor && <SendEmailDialog authority={emailFor} caseData={caseData} onClose={() => setEmailFor(null)} onToast={onToast} />}
     </div>
   );
 }
