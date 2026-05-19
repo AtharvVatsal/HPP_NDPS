@@ -1,0 +1,14 @@
+node_modules
+dist
+.vite
+*.log
+
+# Local editor / tool state
+.claude
+.design-canvas.state.json
+
+# Per-officer working files (not for source control)
+uploads
+
+# Archived earlier-version apps (dashboard, dossier) — keep locally, not in repo
+scraps
