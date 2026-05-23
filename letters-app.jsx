@@ -60,6 +60,8 @@ function defaultForm() {
     selectedLetters: window.LETTERS_DATA.AUTHORITIES.map(a => a.id).concat(["L13"]),
     // Per-letter dispatch log: { L1: { sent: true, date: 'YYYY-MM-DD', dispatchNo: 'No. xxx/xx/...' } }
     sentLog: {},
+    // User-uploaded letter templates — see CustomTemplatesStep below
+    customTemplates: [],
   };
 }
 
@@ -470,6 +472,244 @@ function AuthoritiesStep({ form, set }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Step 6 — Custom letter templates
+// User can upload .txt / .html / .docx OR paste a body. Placeholders like
+// {{fir.no}}, {{accused.name}}, {{station.name}} get auto-filled from form
+// data. The custom letter shows up in the popup alongside the 13 built-ins.
+// ─────────────────────────────────────────────────────────────────────────
+const PLACEHOLDER_HELP = [
+  ['{{fir.no}}',           'FIR number'],
+  ['{{fir.date}}',         'FIR date (dd-mm-yyyy)'],
+  ['{{fir.sections}}',     'NDPS Act sections'],
+  ['{{fir.contraband}}',   'Contraband seized'],
+  ['{{fir.arrestDate}}',   'Date of arrest'],
+  ['{{station.name}}',     'Police station name'],
+  ['{{station.district}}', 'District'],
+  ['{{station.state}}',    'State'],
+  ['{{station.pin}}',      'PIN code'],
+  ['{{station.address}}',  'Postal address'],
+  ['{{station.phone}}',    'Office phone'],
+  ['{{station.email}}',    'Office email'],
+  ['{{io.name}}',          'Investigating Officer name'],
+  ['{{io.rank}}',          'Officer rank'],
+  ['{{io.role}}',          'Officer role / designation'],
+  ['{{io.phone}}',         'Officer phone'],
+  ['{{io.email}}',         'Officer email'],
+  ['{{letterDate}}',       'Letter date (dd-mm-yyyy)'],
+  ['{{accused.name}}',     'First accused — name'],
+  ['{{accused.fatherName}}', 'First accused — father/mother'],
+  ['{{accused.address}}',  'First accused — address'],
+  ['{{accused.id}}',       'First accused — Aadhaar/PAN'],
+  ['{{accusedList}}',      'Comma-separated names of all accused'],
+  ['{{ayFrom}}',           'AY from (for IT)'],
+  ['{{ayTo}}',             'AY to (for IT)'],
+];
+
+function newCustomTemplateId() {
+  return 'CT_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+}
+
+function blankCustomTemplate() {
+  return {
+    id: newCustomTemplateId(),
+    code: 'Custom',
+    title: 'New custom letter',
+    subtitle: 'Custom template',
+    subject: 'Notice under <b>Section 94 BNSS, 2023</b> in connection with FIR No. <b>{{fir.no}}</b>',
+    toAddress: 'The ____________,\n____________,\n____________',
+    body: '<p>Sir / Madam,</p>\n<p>You are hereby requested to furnish ____________ for the last six (6) years in respect of the above-mentioned persons.</p>',
+    defaultDays: 15,
+    includeLetterhead: true,
+    includeStandardOpening: true,
+    includeAccusedTable: true,
+    includeTransmission: true,
+    includeSignature: true,
+    urgent: 'URGENT MATTER / TIME BOUND',
+  };
+}
+
+function CustomTemplatesStep({ form, set }) {
+  const templates = form.customTemplates || [];
+  const [helpOpen, setHelpOpen] = lfUseState(false);
+  const [editingIdx, setEditingIdx] = lfUseState(null);
+  const fileTextRef = lfUseRef(null);
+  const fileDocxRef = lfUseRef(null);
+
+  const addAndSelect = (tpl) => {
+    set({
+      customTemplates: [...templates, tpl],
+      selectedLetters: [...(form.selectedLetters || []), tpl.id],
+    });
+    setEditingIdx(templates.length);
+  };
+  const updateAt = (i, patch) => set({
+    customTemplates: templates.map((t, j) => j === i ? { ...t, ...patch } : t),
+  });
+  const deleteAt = (i) => {
+    if (!confirm('Delete this custom template?')) return;
+    const id = templates[i].id;
+    set({
+      customTemplates: templates.filter((_, j) => j !== i),
+      selectedLetters: (form.selectedLetters || []).filter(x => x !== id),
+    });
+    if (editingIdx === i) setEditingIdx(null);
+  };
+  const toggleSelected = (id) => set({
+    selectedLetters: (form.selectedLetters || []).includes(id)
+      ? (form.selectedLetters || []).filter(x => x !== id)
+      : [...(form.selectedLetters || []), id]
+  });
+
+  const handlePaste = () => {
+    addAndSelect(blankCustomTemplate());
+  };
+
+  const handleTextFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const tpl = blankCustomTemplate();
+      tpl.title = file.name.replace(/\.(txt|html?|md)$/i, '');
+      // If file looks like plain text, wrap each paragraph in <p>; if HTML, keep as-is
+      tpl.body = /<[a-z][\s\S]*>/i.test(text)
+        ? text
+        : text.split(/\n\s*\n/).map(p => `<p>${p.trim().replace(/\n/g, '<br/>')}</p>`).join('\n');
+      addAndSelect(tpl);
+    } catch (err) {
+      alert('Could not read text file — ' + err.message);
+    }
+    e.target.value = '';
+  };
+
+  const handleDocxFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const mammothMod = await import('mammoth/mammoth.browser.js');
+      const mammoth = mammothMod.default || mammothMod;
+      const result = await mammoth.convertToHtml({ arrayBuffer });
+      const tpl = blankCustomTemplate();
+      tpl.title = file.name.replace(/\.docx$/i, '');
+      tpl.body = result.value || '<p>(no content extracted)</p>';
+      addAndSelect(tpl);
+    } catch (err) {
+      console.error(err);
+      alert('Could not read .docx — ' + (err.message || err));
+    }
+    e.target.value = '';
+  };
+
+  return (
+    <CollapsibleSection
+      title="6 · Custom letter templates"
+      sub="upload .docx / .txt / .html — placeholders auto-fill from this form"
+      badge={templates.length}
+      defaultOpen={false}
+    >
+      <div className="lf-rel-bar">
+        <Btn variant="primary" onClick={() => fileDocxRef.current?.click()}>📎 Upload .docx</Btn>
+        <Btn onClick={() => fileTextRef.current?.click()}>📄 Upload .txt / .html</Btn>
+        <Btn onClick={handlePaste}>✎ Paste / type new template</Btn>
+        <Btn onClick={() => setHelpOpen(o => !o)}>{helpOpen ? '▴' : '▾'} Placeholder reference</Btn>
+        <input ref={fileTextRef} type="file" accept=".txt,.html,.htm,.md,text/plain,text/html" style={{ display: 'none' }} onChange={handleTextFile} />
+        <input ref={fileDocxRef} type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" style={{ display: 'none' }} onChange={handleDocxFile} />
+      </div>
+
+      {helpOpen && (
+        <div className="lf-ct-help">
+          <div style={{ fontWeight: 700, marginBottom: 6, color: 'var(--brand-deep)' }}>
+            Placeholder reference — paste these anywhere in the body, subject or To-address
+          </div>
+          <div className="lf-ct-help-grid">
+            {PLACEHOLDER_HELP.map(([code, label]) => (
+              <div key={code} className="lf-ct-help-row">
+                <code>{code}</code>
+                <span>{label}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop: 8, fontSize: 11, color: 'var(--ink-soft)', fontStyle: 'italic' }}>
+            Anything you don't include is just left out. Standard letterhead, transmission paragraph and signature
+            can be toggled per template. The accused / suspects table is inserted automatically unless you turn it off.
+          </div>
+        </div>
+      )}
+
+      {templates.length === 0 && (
+        <div className="lf-ct-empty">
+          No custom templates yet. Upload a Word file you already use, paste body text, or start a blank template.
+          Use <code>{'{{firNo}}'}</code>-style placeholders to auto-fill from the form.
+        </div>
+      )}
+
+      {templates.map((tpl, i) => {
+        const isOpen = editingIdx === i;
+        const selected = (form.selectedLetters || []).includes(tpl.id);
+        return (
+          <div key={tpl.id} className={"lf-ct-card " + (selected ? 'on' : '')}>
+            <div className="lf-ct-card-hd">
+              <label className="lf-auth-toggle">
+                <input type="checkbox" checked={selected} onChange={() => toggleSelected(tpl.id)} />
+                <span className="lf-auth-id" style={{ background: '#7a3aa8' }}>{tpl.id.slice(-4).toUpperCase()}</span>
+                <input
+                  className="lf-input"
+                  value={tpl.title}
+                  onChange={e => updateAt(i, { title: e.target.value })}
+                  placeholder="Title"
+                  style={{ flex: 1, fontWeight: 600 }}
+                />
+              </label>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <Btn onClick={() => setEditingIdx(isOpen ? null : i)}>{isOpen ? '▴ Hide' : '▾ Edit'}</Btn>
+                <Btn variant="danger" onClick={() => deleteAt(i)}>✕</Btn>
+              </div>
+            </div>
+            {isOpen && (
+              <div className="lf-ct-card-body">
+                <div className="lf-grid lf-grid-2">
+                  <Field label="Short code (used in filename)" span={1}>
+                    <TI value={tpl.code} onChange={v => updateAt(i, { code: v })} placeholder="Custom" />
+                  </Field>
+                  <Field label="Reply in (days)" span={1}>
+                    <TI type="number" value={tpl.defaultDays} onChange={v => updateAt(i, { defaultDays: Number(v) || 15 })} />
+                  </Field>
+                  <Field label="Urgent banner text" span={2}>
+                    <TI value={tpl.urgent} onChange={v => updateAt(i, { urgent: v })} placeholder="URGENT MATTER / TIME BOUND" />
+                  </Field>
+                  <Field label="Subject line (HTML and placeholders OK)" span={2}>
+                    <TA rows={2} value={tpl.subject} onChange={v => updateAt(i, { subject: v })} />
+                  </Field>
+                  <Field label="To address (one line per row, placeholders OK)" span={2}>
+                    <TA rows={4} value={tpl.toAddress} onChange={v => updateAt(i, { toAddress: v })} placeholder="The ____,\n____________" />
+                  </Field>
+                  <Field label="Body (HTML and placeholders, e.g. {{fir.no}})" hint="add <p>, <ol>, <li> etc. as needed" span={2}>
+                    <TA rows={10} value={tpl.body} onChange={v => updateAt(i, { body: v })} />
+                  </Field>
+                </div>
+                <div className="lf-ct-toggles">
+                  {['includeLetterhead','includeStandardOpening','includeAccusedTable','includeTransmission','includeSignature'].map(key => (
+                    <label key={key} className="lf-ct-toggle">
+                      <input type="checkbox" checked={tpl[key] !== false} onChange={e => updateAt(i, { [key]: e.target.checked })} />
+                      {key.replace(/^include/, '')}
+                    </label>
+                  ))}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--ink-soft)', fontStyle: 'italic', marginTop: 8 }}>
+                  Tip — open the Generate window with this template selected, switch on <b>✎ Edit text</b> to
+                  fine-tune wording, then Save as PDF / Word.
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </CollapsibleSection>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Build the caseData object the letter templates need
 // ─────────────────────────────────────────────────────────────────────────
 function buildCaseData(form) {
@@ -508,6 +748,7 @@ function buildCaseData(form) {
     slotData: form.slotData || {},
     refNo: form.refNo || {},
     perLetterDays: form.perLetterDays || {},
+    customTemplates: form.customTemplates || [],
   };
 }
 
@@ -683,6 +924,60 @@ function downloadBlob(blob, fileName) {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Word (.doc) export — wraps a single letter's HTML with the MS-Office
+// preamble so Word opens it as an editable document, preserving tables,
+// bold, headings and the letterhead. Uses the .doc extension + msword MIME
+// for maximum compatibility (true .docx would need a heavy library).
+// ─────────────────────────────────────────────────────────────────────────
+function collectAppCss() {
+  return Array.from(document.styleSheets).map(s => {
+    try { return Array.from(s.cssRules).map(r => r.cssText).join("\n"); }
+    catch { return ""; }
+  }).join("\n");
+}
+
+function buildWordHtml(letterOuterHtml, title) {
+  const css = collectAppCss();
+  return `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+<head>
+<meta charset='utf-8'>
+<title>${title.replace(/[<>&]/g, '')}</title>
+<!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View><w:Zoom>100</w:Zoom><w:DoNotOptimizeForBrowser/></w:WordDocument></xml><![endif]-->
+<style>
+@page { size: 210mm 297mm; mso-page-orientation: portrait; margin: 14mm 14mm 14mm 14mm; }
+${css}
+/* Word-specific tweaks — printable preview, hide watermark image, kill shadows */
+.ll-watermark { display: none !important; }
+.ll-page { box-shadow: none !important; margin: 0 0 12mm !important; page-break-after: always; }
+.ll-page:last-child { page-break-after: auto; }
+[contenteditable] { outline: none !important; }
+</style>
+</head>
+<body>
+${letterOuterHtml}
+</body>
+</html>`;
+}
+
+function saveLetterAsWord(letterId, fileName) {
+  const wrap = document.querySelector(`.lf-popup-printregion .lf-letter-wrap[data-letter="${letterId}"]`);
+  const page = wrap?.querySelector('.ll-page');
+  if (!page) throw new Error('Letter not found — open the Generate window first.');
+  const html = buildWordHtml(page.outerHTML, fileName);
+  // BOM helps Word detect UTF-8 reliably
+  const blob = new Blob(['﻿', html], { type: 'application/msword' });
+  downloadBlob(blob, fileName);
+}
+
+async function saveLetterAsPdf(letterId, fileName) {
+  const blob = await generateLetterPdfBlob(letterId, fileName);
+  downloadBlob(blob, fileName);
+}
+
+// Stagger multiple downloads so browsers don't dedupe / block them
+function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
 function canNativelyShareFiles() {
   if (typeof navigator === 'undefined' || !navigator.canShare || !navigator.share) return false;
   try {
@@ -781,19 +1076,85 @@ function SendEmailDialog({ authority, caseData, onClose, onToast }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Memoised letter renderer — built-ins + custom templates. Memoising keeps
+// the underlying DOM stable as long as caseData identity doesn't change, so
+// contentEditable edits made by the user inside the popup are not wiped by
+// re-renders triggered by sidebar / focus / hide-sent toggles.
+// ─────────────────────────────────────────────────────────────────────────
+const LetterBody = React.memo(function LetterBody({ id, caseData, customTemplates }) {
+  if (typeof id === 'string' && id.startsWith('CT_')) {
+    const tpl = (customTemplates || []).find(t => t.id === id);
+    if (!tpl) return null;
+    const Custom = window.LETTER_CUSTOM_RENDERER;
+    return <Custom caseData={caseData} template={tpl} />;
+  }
+  const Comp = window.LETTER_COMPONENTS[id];
+  if (!Comp) return null;
+  return <Comp caseData={caseData} />;
+});
+
+// ─────────────────────────────────────────────────────────────────────────
 // Pop-up Letters Window
 // ─────────────────────────────────────────────────────────────────────────
 function LettersPopup({ form, set, onClose, onToast }) {
   const caseData = lfUseMemo(() => buildCaseData(form), [form]);
-  const all = window.LETTERS_DATA.AUTHORITIES.concat([{ id: "L13", code: "Relatives", title: "Annexure · Master Relative Details", subtitle: "Confidential annexure to every outgoing letter" }]);
+  const builtIn = window.LETTERS_DATA.AUTHORITIES.concat([{ id: "L13", code: "Relatives", title: "Annexure · Master Relative Details", subtitle: "Confidential annexure to every outgoing letter" }]);
+  const customs = (form.customTemplates || []).map(t => ({ id: t.id, code: t.code || 'Custom', title: t.title || 'Custom letter', subtitle: t.subtitle || 'Custom template', isCustom: true }));
+  const all = builtIn.concat(customs);
   const selectedAll = all.filter(a => form.selectedLetters.includes(a.id));
   const [focus, setFocus] = lfUseState(selectedAll[0]?.id);
   const [showSidebar, setShowSidebar] = lfUseState(true);
   const [editSentFor, setEditSentFor] = lfUseState(null);
   const [emailFor, setEmailFor] = lfUseState(null);
   const [hideSent, setHideSent] = lfUseState(false);
+  const [editMode, setEditMode] = lfUseState(false);
+  const [savingAll, setSavingAll] = lfUseState(false);
   const sentLog = form.sentLog || {};
   const visibleAll = hideSent ? selectedAll.filter(a => !sentLog[a.id]?.sent) : selectedAll;
+
+  const safeFileBase = (a) => {
+    const code = a?.code || a?.id || 'letter';
+    const fir = (caseData.fir.no || 'FIR').replace(/[\\\/:*?"<>|]/g, '-');
+    return `${a.id}_${code}_${fir}`.replace(/\s+/g, '_');
+  };
+
+  // ── Save handlers ──────────────────────────────────────────────
+  const saveOnePdf = async (a) => {
+    try {
+      await saveLetterAsPdf(a.id, `${safeFileBase(a)}.pdf`);
+      onToast && onToast(`✓ ${a.id} saved as PDF`);
+    } catch (e) { console.error(e); onToast && onToast('✗ PDF save failed — ' + e.message); }
+  };
+  const saveOneWord = (a) => {
+    try {
+      saveLetterAsWord(a.id, `${safeFileBase(a)}.doc`);
+      onToast && onToast(`✓ ${a.id} saved as Word`);
+    } catch (e) { console.error(e); onToast && onToast('✗ Word save failed — ' + e.message); }
+  };
+  const saveAllPdf = async () => {
+    setSavingAll(true);
+    try {
+      for (let i = 0; i < selectedAll.length; i++) {
+        const a = selectedAll[i];
+        await saveLetterAsPdf(a.id, `${safeFileBase(a)}.pdf`);
+        await delay(350);
+      }
+      onToast && onToast(`✓ Saved ${selectedAll.length} PDFs (one per letter)`);
+    } catch (e) { console.error(e); onToast && onToast('✗ Save all failed — ' + e.message); }
+    finally { setSavingAll(false); }
+  };
+  const saveAllWord = async () => {
+    setSavingAll(true);
+    try {
+      for (let i = 0; i < selectedAll.length; i++) {
+        const a = selectedAll[i];
+        saveLetterAsWord(a.id, `${safeFileBase(a)}.doc`);
+        await delay(250);
+      }
+      onToast && onToast(`✓ Saved ${selectedAll.length} Word files (one per letter)`);
+    } catch (e) { console.error(e); onToast && onToast('✗ Save all failed — ' + e.message); }
+    finally { setSavingAll(false); }
+  };
 
   const markSent = (lid, patch) => {
     const cur = sentLog[lid] || {};
@@ -865,9 +1226,16 @@ function LettersPopup({ form, set, onClose, onToast }) {
             </div>
           </div>
           <div className="lf-popup-actions">
-            <Btn variant="primary" onClick={printOne}>🖨 Print this letter</Btn>
-            <Btn variant="primary" onClick={printAll}>📄 Print all ({selectedAll.length})</Btn>
-            <Btn onClick={() => printUnsent()}>📤 Print unsent ({selectedAll.filter(a => !sentLog[a.id]?.sent).length})</Btn>
+            <Btn variant={editMode ? 'primary' : 'ghost'} onClick={() => setEditMode(e => !e)} title="Toggle direct editing of letter content">
+              {editMode ? '🔓 Editing on' : '✎ Edit text'}
+            </Btn>
+            <Btn variant="primary" onClick={printOne}>🖨 Print this</Btn>
+            <Btn onClick={printAll}>📄 Print all ({selectedAll.length})</Btn>
+            <Btn onClick={() => printUnsent()}>📤 Print unsent</Btn>
+            <Btn variant="primary" onClick={() => { const a = selectedAll.find(x => x.id === focus); if (a) saveOnePdf(a); }} disabled={savingAll}>💾 PDF (this)</Btn>
+            <Btn variant="primary" onClick={() => { const a = selectedAll.find(x => x.id === focus); if (a) saveOneWord(a); }} disabled={savingAll}>📝 Word (this)</Btn>
+            <Btn onClick={saveAllPdf} disabled={savingAll}>{savingAll ? 'Saving…' : `💾 PDF × ${selectedAll.length}`}</Btn>
+            <Btn onClick={saveAllWord} disabled={savingAll}>{savingAll ? 'Saving…' : `📝 Word × ${selectedAll.length}`}</Btn>
             <Btn onClick={onClose}>✕ Close</Btn>
           </div>
         </header>
@@ -931,16 +1299,25 @@ function LettersPopup({ form, set, onClose, onToast }) {
             </div>
           </aside>
           <main className="lf-popup-main">
-            <div className="lf-popup-printregion">
-              {selectedAll.map(a => {
-                const Comp = window.LETTER_COMPONENTS[a.id];
-                if (!Comp) return null;
-                return (
-                  <div key={a.id} className={"lf-letter-wrap " + (focus === a.id ? "is-focus" : "is-other")} data-letter={a.id}>
-                    <Comp caseData={caseData} />
-                  </div>
-                );
-              })}
+            {editMode && (
+              <div className="lf-editbar">
+                ✎ Edit mode is ON — click any text in a letter to edit. Changes are kept until you close this window; save as PDF / Word to keep them permanently.
+              </div>
+            )}
+            <div className={"lf-popup-printregion " + (editMode ? 'is-editing' : '')}>
+              {selectedAll.map(a => (
+                <div
+                  key={a.id}
+                  className={"lf-letter-wrap " + (focus === a.id ? "is-focus" : "is-other")}
+                  data-letter={a.id}
+                  contentEditable={editMode}
+                  suppressContentEditableWarning
+                  spellCheck={editMode}
+                  onClick={() => setFocus(a.id)}
+                >
+                  <LetterBody id={a.id} caseData={caseData} customTemplates={form.customTemplates} />
+                </div>
+              ))}
             </div>
           </main>
         </div>
@@ -1027,6 +1404,7 @@ function LettersApp() {
           <PersonsStep form={form} set={set} />
           <RelativesStep form={form} set={set} />
           <AuthoritiesStep form={form} set={set} />
+          <CustomTemplatesStep form={form} set={set} />
 
           <div className="lf-cta">
             <div className="lf-cta-l">
@@ -1049,9 +1427,17 @@ function LettersApp() {
           <div className="lf-preview-frame">
             {(() => {
               const firstId = form.selectedLetters[0];
+              if (!firstId) return <div style={{ padding: 40, textAlign: "center", color: "#605e5c" }}>Select at least one authority in Step 5 or add a custom template in Step 6.</div>;
+              const cd = buildCaseData(form);
+              if (typeof firstId === 'string' && firstId.startsWith('CT_')) {
+                const tpl = (form.customTemplates || []).find(t => t.id === firstId);
+                if (!tpl) return <div style={{ padding: 40, textAlign: "center", color: "#605e5c" }}>Custom template not found.</div>;
+                const Custom = window.LETTER_CUSTOM_RENDERER;
+                return <Custom caseData={cd} template={tpl} />;
+              }
               const Comp = window.LETTER_COMPONENTS[firstId];
               if (!Comp) return <div style={{ padding: 40, textAlign: "center", color: "#605e5c" }}>Select at least one authority in Step 5.</div>;
-              return <Comp caseData={buildCaseData(form)} />;
+              return <Comp caseData={cd} />;
             })()}
           </div>
         </aside>

@@ -20,7 +20,9 @@ window.LETTERS_DATA = (function () {
       hint: "Sent to the Postmaster + each Branch Manager whose KYC may apply.",
       defaultDays: 15,
       slots: [
-        { id: "branchList", label: "Postmaster + Bank Branches (one per line)", multiline: true, placeholder: "Postmaster, Sub-Post Office __________\nSBI, Branch __________ (IFSC __________)\nPNB, Branch __________\nHDFC Bank, Branch __________\nLocal Cooperative Bank, Branch __________" },
+        { id: "competentAuthority", label: "Competent Authority (u/s 68D NDPS)", placeholder: "The Competent Authority &amp; Administrator, SAFEM(FOP)A &amp; NDPS, Mumbai" },
+        { id: "postOffice",         label: "Sub-Post Office (name &amp; location)", placeholder: "Sub-Post Office ____________, Tehsil ____________, Distt. ____________" },
+        { id: "branchList",         label: "Bank Branches (one per line)", multiline: true, placeholder: "SBI, Branch __________ (IFSC __________)\nPNB, Branch __________\nHDFC Bank, Branch __________\nLocal Cooperative Bank, Branch __________" },
       ],
     },
     {

@@ -581,27 +581,145 @@
   .lf-letter-wrap.is-other { opacity: 0.55; transform: scale(0.99); transition: opacity .15s, transform .15s; }
   .lf-letter-wrap.is-focus { opacity: 1; transform: scale(1); box-shadow: 0 0 0 3px var(--brand-acc); border-radius: 4px; }
 
+  /* Custom-template cards (Step 6) */
+  .lf-ct-empty {
+    padding: 18px;
+    background: #faf8f3;
+    border: 1px dashed var(--line);
+    border-radius: 10px;
+    font-size: 12.5px;
+    color: var(--ink-soft);
+    line-height: 1.55;
+    text-align: center;
+  }
+  .lf-ct-empty code {
+    background: #fff;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'Roboto Mono', monospace;
+    font-size: 11.5px;
+    color: var(--brand-deep);
+    border: 1px solid var(--line);
+  }
+  .lf-ct-card {
+    background: #fafaf6;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    margin-bottom: 12px;
+    overflow: hidden;
+    transition: all .18s ease;
+  }
+  .lf-ct-card.on {
+    background: #fff;
+    border-color: #7a3aa8;
+    box-shadow: 0 0 0 1px #7a3aa8, 0 4px 14px rgba(122,58,168,0.08);
+  }
+  .lf-ct-card-hd {
+    padding: 10px 14px;
+    display: flex; align-items: center; gap: 10px; justify-content: space-between;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .lf-ct-card-hd .lf-input { font-size: 13px; padding: 6px 8px; }
+  .lf-ct-card-body { padding: 14px 16px 16px; background: #fff; }
+  .lf-ct-toggles {
+    display: flex; flex-wrap: wrap; gap: 12px;
+    padding: 10px 12px; margin-top: 8px;
+    background: #faf8f3; border-radius: 8px; border: 1px dashed var(--line);
+  }
+  .lf-ct-toggle {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11.5px; color: var(--ink-soft); cursor: pointer;
+  }
+  .lf-ct-help {
+    margin: 10px 0 14px;
+    padding: 12px 14px;
+    background: var(--brand-acc-soft);
+    border: 1px dashed var(--brand-acc);
+    border-radius: 8px;
+    font-size: 11.5px;
+    color: var(--brand-deep);
+  }
+  .lf-ct-help-grid {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 14px;
+  }
+  @media (max-width: 900px) { .lf-ct-help-grid { grid-template-columns: 1fr; } }
+  .lf-ct-help-row {
+    display: flex; gap: 8px; align-items: baseline;
+    padding: 2px 0;
+  }
+  .lf-ct-help-row code {
+    font-family: 'Roboto Mono', monospace;
+    font-size: 10.5px;
+    background: #fff;
+    padding: 1px 5px;
+    border-radius: 3px;
+    border: 1px solid var(--brand-acc);
+    color: var(--brand-deep);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .lf-ct-help-row span { font-size: 11px; color: var(--ink-soft); }
+
+  /* Edit-mode UI ─ letters become directly editable */
+  .lf-editbar {
+    background: linear-gradient(135deg, #fff4d4 0%, #ffe9a8 100%);
+    color: var(--brand-deep);
+    padding: 10px 18px;
+    font-size: 12px;
+    font-weight: 600;
+    border-bottom: 1px solid var(--brand-acc);
+    border-radius: 6px;
+    margin: 0 0 12px;
+    box-shadow: 0 1px 3px rgba(176,141,58,0.18);
+  }
+  .lf-popup-printregion.is-editing .lf-letter-wrap {
+    outline: 2px dashed transparent;
+    outline-offset: 4px;
+    transition: outline-color .15s;
+  }
+  .lf-popup-printregion.is-editing .lf-letter-wrap:hover {
+    outline-color: var(--brand-acc);
+  }
+  .lf-popup-printregion.is-editing .lf-letter-wrap:focus-within {
+    outline-color: var(--brand);
+    outline-style: solid;
+  }
+  .lf-popup-printregion.is-editing .ll-page {
+    cursor: text;
+  }
+  [contenteditable="true"]:focus { outline: none; }
+
   /* ──────────────────────────────────────────────────────────────────
      PRINT
      ────────────────────────────────────────────────────────────────── */
   @page { size: A4; margin: 14mm 14mm 14mm 14mm; }
   @media print {
     html, body { background: #fff !important; }
+    /* Hide everything outside the popup, but DO NOT hide .lf-popup-back —
+       its children (the letters) must still render. Instead, neutralise the
+       backdrop so it stops behaving like a fixed-position overlay. */
     .lf-topbar, .lf-form, .lf-preview, .lf-cta,
-    .lf-popup-chrome, .lf-popup-side, .lf-popup-back { display: none !important; }
+    .lf-popup-chrome, .lf-popup-side { display: none !important; }
+    .lf-hashbar, .lf-toast, .lf-modal-back { display: none !important; }
+    .lf-popup-back {
+      position: static !important; inset: auto !important;
+      background: transparent !important; padding: 0 !important;
+      backdrop-filter: none !important; display: block !important;
+    }
     .lf-popup {
       position: static !important; width: 100% !important; height: auto !important;
       max-width: none !important; box-shadow: none !important; background: #fff !important; border-radius: 0;
+      display: block !important;
     }
     .lf-popup-body { display: block !important; }
-    .lf-popup-main { padding: 0 !important; background: #fff !important; overflow: visible !important; }
+    .lf-popup-main { padding: 0 !important; background: #fff !important; overflow: visible !important; display: block !important; }
     .lf-popup-printregion { display: block !important; }
     .ll-page {
       box-shadow: none !important; margin: 0 !important; page-break-after: always;
       page-break-inside: avoid; break-after: page; break-inside: avoid;
     }
     .ll-page:last-child { page-break-after: auto; }
-    .lf-letter-wrap { opacity: 1 !important; transform: none !important; box-shadow: none !important; }
+    .lf-letter-wrap { opacity: 1 !important; transform: none !important; box-shadow: none !important; display: block !important; }
     .lf-letter-wrap.is-other { display: block !important; }
   }
   /* When user picks "Print this letter" only — hide non-focus letters */

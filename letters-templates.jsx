@@ -206,9 +206,13 @@ const { Fragment } = React;
 function L_Banks({ caseData }) {
   const { station, io, fir, accused, suspects, slotData } = caseData;
   const days = caseData.perLetterDays?.L1 ?? 15;
+  const competentAuthority = slotData?.L1?.competentAuthority || "The Competent Authority & Administrator, SAFEM(FOP)A & NDPS, ____________";
+  const postOffice = slotData?.L1?.postOffice || "Sub-Post Office ____________";
   const branches = lines(slotData?.L1?.branchList);
-  const toLines = ["The Postmaster, Sub-Post Office __________________________",
-    ...branches.map(b => `The Branch Manager, ${b}`)];
+  const toLines = [
+    `The Postmaster, ${postOffice}`,
+    ...branches.map(b => `The Branch Manager, ${b}`),
+  ];
   if (toLines.length < 8) for (let i = toLines.length; i < 8; i++) toLines.push("The Branch Manager, __________________________");
   return (
     <LetterPage id="L1">
@@ -228,7 +232,7 @@ function L_Banks({ caseData }) {
         <P>
           In exercise of powers conferred under <b>Section 94 BNSS, 2023</b>, you are hereby requested to furnish the
           following information for the last <b>six (6) years</b> up to date in respect of the above-mentioned persons,
-          if any accounts / investments are maintained in your branch —
+          if any accounts / investments are maintained in your branch / post office —
         </P>
         <ol className="ll-ol">
           <li>Certified statements of all <b>savings / current / OD / CC</b> accounts.</li>
@@ -238,11 +242,12 @@ function L_Banks({ caseData }) {
           <li>Details of <b>mutual funds, shares, DEMAT accounts</b> and other investment products.</li>
           <li>Details of <b>insurance policies</b> issued through your branch.</li>
           <li><b>KYC documents</b> submitted at the time of opening the account.</li>
+          <li><b>Post-Office instruments</b> — MIS / NSC / KVP / RD / TD / SCSS / SSY / PPF held at the said Sub-Post Office (where applicable).</li>
         </ol>
         <P>
           You are further requested <b>not to permit any unusual or suspicious transactions</b> and to intimate this
           office immediately in case of any high-value transaction, pending appropriate legal orders regarding
-          seizure / freezing from the Competent Authority u/s 68D of the NDPS Act, 1985.
+          seizure / freezing from the Competent Authority u/s 68D of the NDPS Act, 1985, viz. <b>{competentAuthority}</b>.
         </P>
         <P>
           The above information is required for the purpose of financial investigation under Chapter V-A of the NDPS
@@ -824,6 +829,101 @@ function L_RelativesAttachment({ caseData }) {
     </LetterPage>
   );
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Custom template renderer — for letters the officer uploads / pastes.
+// Placeholders use the {{path.to.value}} syntax; supported paths are listed
+// in the form's Custom Templates help text. The body HTML is rendered via
+// dangerouslySetInnerHTML; standard letterhead, To block, transmission and
+// signature can each be toggled off per template.
+// ─────────────────────────────────────────────────────────────────────────
+function interpolate(text, ctx) {
+  if (!text) return "";
+  return String(text).replace(/\{\{\s*([\w.\-]+)\s*\}\}/g, (_, path) => {
+    const segs = path.split(".");
+    let v = ctx;
+    for (const s of segs) {
+      if (v == null) return "";
+      v = v[s];
+    }
+    if (v == null) return "";
+    if (typeof v === "object") return "";
+    return String(v);
+  });
+}
+
+function buildInterpContext(caseData) {
+  const a0 = caseData.accused?.[0] || {};
+  const accusedList = (caseData.accused || []).map(a => a.name).filter(Boolean).join(", ");
+  return {
+    fir: {
+      no: safe(caseData.fir?.no),
+      date: fmt(caseData.fir?.date),
+      sections: safe(caseData.fir?.sections),
+      contraband: safe(caseData.fir?.contraband),
+      arrestDate: fmt(caseData.fir?.arrestDate),
+    },
+    station: {
+      name: safe(caseData.station?.name),
+      district: safe(caseData.station?.district),
+      subdivision: safe(caseData.station?.subdivision),
+      state: safe(caseData.station?.state),
+      pin: safe(caseData.station?.pin),
+      address: safe(caseData.station?.address),
+      phone: safe(caseData.station?.phone),
+      email: safe(caseData.station?.email),
+    },
+    io: {
+      name: safe(caseData.io?.name),
+      rank: safe(caseData.io?.rank),
+      role: safe(caseData.io?.role),
+      phone: safe(caseData.io?.phone),
+      email: safe(caseData.io?.email),
+    },
+    letterDate: fmt(caseData.letterDate),
+    accused: {
+      name: safe(a0.name),
+      fatherName: safe(a0.fatherName),
+      address: safe(a0.address),
+      id: safe(a0.id),
+      pan: safe(a0.pan),
+    },
+    accusedList,
+    ayFrom: safe(caseData.ayFrom),
+    ayTo: safe(caseData.ayTo),
+  };
+}
+
+function CustomLetter({ caseData, template }) {
+  const { station, io, fir, accused, suspects } = caseData;
+  const days = caseData.perLetterDays?.[template.id] ?? template.defaultDays ?? 15;
+  const ctx = buildInterpContext(caseData);
+  const toAddress = interpolate(template.toAddress || "", ctx);
+  const toLines = toAddress.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  const bodyHtml = interpolate(template.body || "", ctx);
+  const subject = interpolate(template.subject || "", ctx);
+  const refNo = caseData.refNo?.[template.id] || `__/${template.code || "CUS"}/${fir.no || ""}`;
+
+  return (
+    <LetterPage id={template.id}>
+      {template.includeLetterhead !== false && <LetterHead station={station} titles={caseData.letterheadTitles} urgent={template.urgent || "URGENT MATTER / TIME BOUND"} />}
+      <LetterRef refNo={refNo} date={caseData.letterDate} />
+      {toLines.length > 0 && <ToBlock to={toLines} />}
+      {subject && <Subject><span dangerouslySetInnerHTML={{ __html: subject }} /></Subject>}
+      <P>Sir / Madam,</P>
+      {template.includeStandardOpening !== false && <StandardOpening fir={fir} station={station} />}
+      {template.includeAccusedTable !== false && <ParticularsTable accused={accused} suspects={suspects} />}
+      <div className="ll-block" dangerouslySetInnerHTML={{ __html: bodyHtml }} />
+      {template.includeTransmission !== false && <Transmission station={station} io={io} daysToReply={days} />}
+      {template.includeSignature !== false && <Signature io={io} station={station} />}
+    </LetterPage>
+  );
+}
+
+// Expose helper for the app shell
+window.LETTER_CUSTOM_RENDERER = CustomLetter;
+window.LETTER_INTERPOLATE = interpolate;
+window.LETTER_INTERP_CONTEXT = buildInterpContext;
 
 // Master switch — pick the right component for the given letter id
 window.LETTER_COMPONENTS = {
